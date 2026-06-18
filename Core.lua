@@ -452,11 +452,35 @@ SlashCmdList.FOHM = function(msg)
         DB.opts.reminder = false
         if reminderFrame and reminderFrame:IsShown() then reminderFrame:Hide() end
         print("FOHM: reminder OFF")
+    elseif msg == "debug" then
+        print("=== FOHM DEBUG ===")
+        print("herbKnown:", tostring(herbKnown))
+        print("mineKnown:", tostring(mineKnown))
+        local hs, hd = GetCooldown(SPELL_HERB)
+        local ms, md = GetCooldown(SPELL_MINE)
+        print("Herb cooldown start/dur:", hs, hd, "ready:", tostring(IsReady(SPELL_HERB)))
+        print("Mine cooldown start/dur:", ms, md, "ready:", tostring(IsReady(SPELL_MINE)))
+        if frames.herb then
+            print("Herb frame alpha:", frames.herb:GetAlpha(), "shown:", tostring(frames.herb:IsShown()))
+            print("Herb macrotext:", frames.herb:GetAttribute("macrotext"))
+            print("Herb ready flag:", tostring(frames.herb.ready))
+        end
+        if frames.mine then
+            print("Mine frame alpha:", frames.mine:GetAlpha(), "shown:", tostring(frames.mine:IsShown()))
+            print("Mine macrotext:", frames.mine:GetAttribute("macrotext"))
+            print("Mine ready flag:", tostring(frames.mine.ready))
+        end
+        local herbName = GetSpellName(SPELL_HERB)
+        local mineName = GetSpellName(SPELL_MINE)
+        print("Herb spell name lookup:", tostring(herbName))
+        print("Mine spell name lookup:", tostring(mineName))
+        print("DB.opts:", "locked="..tostring(DB.opts.locked), "reminder="..tostring(DB.opts.reminder))
     else
         print("FOHM commands:")
         print("  /fohm lock           — lock frames in place")
         print("  /fohm unlock         — unlock frames (right-click drag to move)")
         print("  /fohm reminder on    — enable tooltip reminder overlay")
         print("  /fohm reminder off   — disable tooltip reminder overlay")
+        print("  /fohm debug          — print diagnostic info")
     end
 end
