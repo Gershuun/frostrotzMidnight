@@ -60,17 +60,6 @@ local function RefreshKnown()
     if mineKnown == nil then mineKnown = mk elseif mk then mineKnown = true end
 end
 
-local function GetSpellName(spellID)
-    if C_Spell and C_Spell.GetSpellName then
-        local ok, name = pcall(C_Spell.GetSpellName, spellID)
-        if ok and name and name ~= "" then return name end
-    end
-    -- fallback: GetSpellInfo returns name as first value
-    local ok, name = pcall(GetSpellInfo, spellID)
-    if ok and name and name ~= "" then return name end
-    return nil
-end
-
 local function GetSpellIcon(spellID)
     if C_Spell and C_Spell.GetSpellInfo then
         local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
@@ -80,31 +69,30 @@ local function GetSpellIcon(spellID)
     return ok and tex or 134400
 end
 
--- Returns start, duration. Filters out GCD (duration <= 1.6, isEnabled false).
-local function GetCooldown(spellID)
-    if C_Spell and C_Spell.GetSpellCooldown then
-        local ok, cd = pcall(C_Spell.GetSpellCooldown, spellID)
-        if ok and type(cd) == "table" then
-            local start    = cd.startTime or 0
-            local duration = cd.duration  or 0
-            if duration > 0 and duration <= 1.6 and cd.isEnabled == false then
-                return 0, 0 -- ignore GCD
-            end
-            return start, duration
-        end
+local function GetSpellName(spellID)
+    if C_Spell and C_Spell.GetSpellName then
+        local ok, name = pcall(C_Spell.GetSpellName, spellID)
+        if ok and name and name ~= "" then return name end
     end
-    return 0, 0
+    local ok, name = pcall(GetSpellInfo, spellID)
+    if ok and name and name ~= "" then return name end
+    return nil
 end
 
+-- IsReady: use the built-in spell usable check instead of reading protected cooldown numbers.
+-- C_Spell.IsSpellUsable returns (usable, noMana) and is safe to call from tainted addons.
 local function IsReady(spellID)
-    local start, duration = GetCooldown(spellID)
-    return (start == 0) or (duration == 0)
+    if C_Spell and C_Spell.IsSpellUsable then
+        local ok, usable = pcall(C_Spell.IsSpellUsable, spellID)
+        if ok then return usable and true or false end
+    end
+    local ok, usable = pcall(IsUsableSpell, spellID)
+    return ok and usable and true or false
 end
 
 local function ApplyLockState()
-    local locked = DB and DB.opts and DB.opts.locked
-    -- EnableMouse on a SecureActionButtonTemplate must not be called in combat
     if InCombatLockdown() then return end
+    local locked = DB and DB.opts and DB.opts.locked
     if frames.herb then frames.herb:EnableMouse(not locked) end
     if frames.mine then frames.mine:EnableMouse(not locked) end
     if reminderFrame and reminderFrame.handle then
@@ -117,17 +105,11 @@ end
 -- Trackers
 -- =========================
 local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, smallLabel)
-    -- SecureActionButtonTemplate is the only safe way to cast protected spells.
-    -- IMPORTANT: never call Hide()/Show() on this frame — it breaks secure state.
-    -- Instead we dim/desaturate to indicate cooldown while keeping it always visible.
     local f = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate,BackdropTemplate")
     f:SetSize(ICON_SIZE, ICON_SIZE)
     f:SetMovable(true)
     f:SetClampedToScreen(true)
 
-    -- Use macrotext to cast by name — most reliable approach for Midnight-era spells.
-    -- GetSpellName at frame creation time is safe; spell data is loaded by PLAYER_LOGIN.
-    -- macrotext does NOT create a macro in the player's macro list.
     f:SetAttribute("type",      "macro")
     f:SetAttribute("macrotext", "/cast " .. (spellName or ""))
 
@@ -139,30 +121,22 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
     f.icon:SetAllPoints()
     f.icon:SetTexture(GetSpellIcon(spellID))
 
-    -- Cooldown swipe (same as action bars)
-    f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
-    f.cooldown:SetAllPoints()
-    f.cooldown:SetDrawEdge(true)
-    f.cooldown:SetDrawSwipe(true)
-    f.cooldown:SetHideCountdownNumbers(false)
-
-    -- Glow border — visible only when ready
+    -- Glow border
     f.border = f:CreateTexture(nil, "OVERLAY")
     f.border:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
     f.border:SetBlendMode("ADD")
-    f.border:SetAlpha(0)
+    f.border:SetAlpha(0.9)
     f.border:SetSize(ICON_SIZE * 1.7, ICON_SIZE * 1.7)
     f.border:SetPoint("CENTER")
 
-    -- "Ready" text above icon — visible only when ready
+    -- "Ready" label above
     f.text = f:CreateFontString(nil, "OVERLAY")
     f.text:SetFont(FONT_TITLE, 16, "OUTLINE")
     f.text:SetPoint("BOTTOM", f, "TOP", 0, 4)
     f.text:SetText("Ready")
     f.text:SetTextColor(0.2, 1, 0.2)
-    f.text:Hide()
 
-    -- Small label below icon — always visible
+    -- Small label below
     f.small = f:CreateFontString(nil, "OVERLAY")
     f.small:SetFont(FONT_BODY, 11, "OUTLINE")
     f.small:SetPoint("TOP", f, "BOTTOM", 0, -2)
@@ -171,9 +145,7 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
 
     f.spellID = spellID
     f.key     = key
-    f.ready   = false
 
-    -- OnDragStart/Stop are non-secure scripts; safe on SecureActionButtonTemplate
     f:SetScript("OnDragStart", function(self)
         if not InCombatLockdown() then self:StartMoving() end
     end)
@@ -184,14 +156,9 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
 
     f:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        local name = (C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(self.spellID))
-                  or ("SpellID " .. self.spellID)
+        local name = GetSpellName(self.spellID) or ("SpellID " .. self.spellID)
         GameTooltip:AddLine(name)
-        if self.ready then
-            GameTooltip:AddLine("Click to cast", 0.2, 1, 0.2)
-        else
-            GameTooltip:AddLine("On cooldown", 1, 0.5, 0.5)
-        end
+        GameTooltip:AddLine("Click to cast", 0.2, 1, 0.2)
         GameTooltip:AddLine("Right-click drag to move", 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end)
@@ -200,7 +167,7 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
         if GameTooltip:GetOwner() == self then GameTooltip:Hide() end
     end)
 
-    -- Frame starts hidden until we confirm the player knows the spell
+    -- Start invisible; UpdateTrackers will show it if spell is known and ready
     f:SetAlpha(0)
     f:EnableMouse(false)
 
@@ -208,32 +175,19 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
     return f
 end
 
--- Update visuals without ever calling Show/Hide on the secure frame.
--- Alpha=0 + EnableMouse(false) acts as invisible+unclickable safely.
 local function UpdateTrackerVisuals(f, spellID, known)
     if not known then
         f:SetAlpha(0)
-        f:EnableMouse(false)
+        if not InCombatLockdown() then f:EnableMouse(false) end
         return
     end
-
-    f:SetAlpha(1)
-    if not InCombatLockdown() then f:EnableMouse(true) end
-
-    local start, duration = GetCooldown(spellID)
-    local ready = (start == 0) or (duration == 0)
-    f.ready = ready
-
+    local ready = IsReady(spellID)
     if ready then
-        f.cooldown:Clear()
-        f.icon:SetDesaturated(false)
-        f.border:SetAlpha(0.9)
-        f.text:Show()
+        f:SetAlpha(1)
+        if not InCombatLockdown() then f:EnableMouse(true) end
     else
-        f.cooldown:SetCooldown(start, duration)
-        f.icon:SetDesaturated(true)
-        f.border:SetAlpha(0)
-        f.text:Hide()
+        f:SetAlpha(0)
+        if not InCombatLockdown() then f:EnableMouse(false) end
     end
 end
 
@@ -264,8 +218,8 @@ local herbNames = {
 }
 
 local oreNames = {
-    ["Refulgent Copper"]   = true, ["Brilliant Silver"] = true, ["Umbral Tin"]  = true,
-    ["Strahlendes Kupfer"] = true, ["Brillantsilber"]   = true, ["Umbralzinn"]  = true,
+    ["Refulgent Copper"]   = true, ["Brilliant Silver"] = true, ["Umbral Tin"] = true,
+    ["Strahlendes Kupfer"] = true, ["Brillantsilber"]   = true, ["Umbralzinn"] = true,
 }
 
 local function ParseNodeName(name)
@@ -277,7 +231,6 @@ local function ParseNodeName(name)
         end
     end
     if not foundAffix then return end
-
     local isHerb, isOre
     for herb in pairs(herbNames) do
         if string.find(name, herb, 1, true) then isHerb = true; break end
@@ -397,9 +350,9 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
-ev:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+ev:RegisterEvent("SPELL_UPDATE_USABLE")   -- fires when usability changes (replaces cooldown polling)
 ev:RegisterEvent("SPELLS_CHANGED")
-ev:RegisterEvent("PLAYER_REGEN_ENABLED") -- fires when combat ends
+ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 
 ev:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON then
@@ -420,13 +373,13 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     end
 
     if event == "PLAYER_REGEN_ENABLED" then
-        -- Reapply lock state now that combat lockdown has lifted
         ApplyLockState()
-        UpdateTrackers()
-        return
     end
 
-    if event == "SPELLS_CHANGED" then RefreshKnown() end
+    if event == "SPELLS_CHANGED" then
+        RefreshKnown()
+    end
+
     UpdateTrackers()
 end)
 
@@ -456,31 +409,22 @@ SlashCmdList.FOHM = function(msg)
         print("=== FOHM DEBUG ===")
         print("herbKnown:", tostring(herbKnown))
         print("mineKnown:", tostring(mineKnown))
-        local hs, hd = GetCooldown(SPELL_HERB)
-        local ms, md = GetCooldown(SPELL_MINE)
-        print("Herb cooldown start/dur:", hs, hd, "ready:", tostring(IsReady(SPELL_HERB)))
-        print("Mine cooldown start/dur:", ms, md, "ready:", tostring(IsReady(SPELL_MINE)))
+        print("Herb IsReady:", tostring(IsReady(SPELL_HERB)))
+        print("Mine IsReady:", tostring(IsReady(SPELL_MINE)))
         if frames.herb then
-            print("Herb frame alpha:", frames.herb:GetAlpha(), "shown:", tostring(frames.herb:IsShown()))
+            print("Herb alpha:", frames.herb:GetAlpha(), "mouse:", tostring(frames.herb:IsMouseEnabled()))
             print("Herb macrotext:", frames.herb:GetAttribute("macrotext"))
-            print("Herb ready flag:", tostring(frames.herb.ready))
         end
         if frames.mine then
-            print("Mine frame alpha:", frames.mine:GetAlpha(), "shown:", tostring(frames.mine:IsShown()))
+            print("Mine alpha:", frames.mine:GetAlpha(), "mouse:", tostring(frames.mine:IsMouseEnabled()))
             print("Mine macrotext:", frames.mine:GetAttribute("macrotext"))
-            print("Mine ready flag:", tostring(frames.mine.ready))
         end
-        local herbName = GetSpellName(SPELL_HERB)
-        local mineName = GetSpellName(SPELL_MINE)
-        print("Herb spell name lookup:", tostring(herbName))
-        print("Mine spell name lookup:", tostring(mineName))
-        print("DB.opts:", "locked="..tostring(DB.opts.locked), "reminder="..tostring(DB.opts.reminder))
+        print("Herb name:", tostring(GetSpellName(SPELL_HERB)))
+        print("Mine name:", tostring(GetSpellName(SPELL_MINE)))
     else
         print("FOHM commands:")
-        print("  /fohm lock           — lock frames in place")
-        print("  /fohm unlock         — unlock frames (right-click drag to move)")
-        print("  /fohm reminder on    — enable tooltip reminder overlay")
-        print("  /fohm reminder off   — disable tooltip reminder overlay")
-        print("  /fohm debug          — print diagnostic info")
+        print("  /fohm lock / unlock")
+        print("  /fohm reminder on / off")
+        print("  /fohm debug")
     end
 end
