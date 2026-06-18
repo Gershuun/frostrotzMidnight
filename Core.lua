@@ -96,10 +96,13 @@ local function IsReady(spellID)
     return ready
 end
 
-local function TryCastSpell(spellID)
-    -- CastSpellByID must be called from a secure (hardware) event context.
-    -- The OnClick of a Button satisfies this requirement.
-    CastSpellByID(spellID)
+local function GetSpellName(spellID)
+    if C_Spell and C_Spell.GetSpellName then
+        local ok, name = pcall(C_Spell.GetSpellName, spellID)
+        if ok and name then return name end
+    end
+    local ok, name = pcall(GetSpellInfo, spellID)
+    return ok and name or nil
 end
 
 local function ApplyLockState()
@@ -121,12 +124,13 @@ local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
     f:SetMovable(true)
     f:SetClampedToScreen(true)
 
-    -- Secure attributes: left-click casts the spell
-    f:SetAttribute("type",    "spell")
-    f:SetAttribute("spell",   spellID)
+    -- Secure attributes: left-click casts the spell.
+    -- SetAttribute("spell") requires the spell name string, not a numeric ID.
+    f:SetAttribute("type",  "spell")
+    f:SetAttribute("spell", GetSpellName(spellID) or spellID)
 
-    -- Right-click drag to move (does not conflict with SecureActionButton)
-    f:RegisterForClicks("AnyUp")
+    -- Only register LeftButtonUp for the secure template; right-drag is separate.
+    f:RegisterForClicks("LeftButtonUp")
     f:RegisterForDrag("RightButton")
 
     f:SetScript("OnDragStart", function(self)
