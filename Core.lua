@@ -96,15 +96,6 @@ local function IsReady(spellID)
     return ready
 end
 
-local function GetSpellName(spellID)
-    if C_Spell and C_Spell.GetSpellName then
-        local ok, name = pcall(C_Spell.GetSpellName, spellID)
-        if ok and name then return name end
-    end
-    local ok, name = pcall(GetSpellInfo, spellID)
-    return ok and name or nil
-end
-
 local function ApplyLockState()
     local locked = DB and DB.opts and DB.opts.locked
     if frames.herb then frames.herb:EnableMouse(not locked) end
@@ -119,19 +110,21 @@ end
 -- Trackers
 -- =========================
 local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
-    local f = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate,BackdropTemplate")
+    local f = CreateFrame("Button", nil, UIParent, "BackdropTemplate")
     f:SetSize(ICON_SIZE, ICON_SIZE)
     f:SetMovable(true)
     f:SetClampedToScreen(true)
 
-    -- Secure attributes: left-click casts the spell.
-    -- SetAttribute("spell") requires the spell name string, not a numeric ID.
-    f:SetAttribute("type",  "spell")
-    f:SetAttribute("spell", GetSpellName(spellID) or spellID)
-
-    -- Only register LeftButtonUp for the secure template; right-drag is separate.
+    -- Gathering spells can't be cast in combat, so a plain OnClick is fine.
+    -- CastSpellByID is allowed from any hardware mouse event without taint.
     f:RegisterForClicks("LeftButtonUp")
     f:RegisterForDrag("RightButton")
+
+    f:SetScript("OnClick", function(self, button)
+        if button == "LeftButton" then
+            CastSpellByID(self.spellID)
+        end
+    end)
 
     f:SetScript("OnDragStart", function(self)
         if not InCombatLockdown() then self:StartMoving() end
