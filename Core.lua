@@ -79,8 +79,7 @@ local function GetSpellName(spellID)
     return nil
 end
 
--- IsReady: use the built-in spell usable check instead of reading protected cooldown numbers.
--- C_Spell.IsSpellUsable returns (usable, noMana) and is safe to call from tainted addons.
+-- IsSpellUsable is safe from tainted addons; avoids reading protected cooldown numbers.
 local function IsReady(spellID)
     if C_Spell and C_Spell.IsSpellUsable then
         local ok, usable = pcall(C_Spell.IsSpellUsable, spellID)
@@ -104,16 +103,13 @@ end
 -- =========================
 -- Trackers
 -- =========================
-local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, smallLabel)
-    local f = CreateFrame("Button", "FOHM_Tracker_" .. key, UIParent, "SecureActionButtonTemplate,BackdropTemplate")
+local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
+    -- Plain Button — no secure template since click-casting is not yet supported
+    -- in Midnight's addon API for these spell types.
+    local f = CreateFrame("Button", "FOHM_Tracker_" .. key, UIParent, "BackdropTemplate")
     f:SetSize(ICON_SIZE, ICON_SIZE)
     f:SetMovable(true)
     f:SetClampedToScreen(true)
-
-    f:SetAttribute("type",      "macro")
-    f:SetAttribute("macrotext", "/cast " .. (spellName or ""))
-
-    f:RegisterForClicks("LeftButtonUp")
     f:RegisterForDrag("RightButton")
 
     -- Icon
@@ -146,11 +142,6 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
     f.spellID = spellID
     f.key     = key
 
-    -- PreClick fires before the secure action — safe to use for diagnostics
-    f:SetScript("PreClick", function(self, button)
-        print("FOHM: clicked", key, "button=", button, "macrotext=", self:GetAttribute("macrotext"))
-    end)
-
     f:SetScript("OnDragStart", function(self)
         if not InCombatLockdown() then self:StartMoving() end
     end)
@@ -163,7 +154,6 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local name = GetSpellName(self.spellID) or ("SpellID " .. self.spellID)
         GameTooltip:AddLine(name)
-        GameTooltip:AddLine("Click to cast", 0.2, 1, 0.2)
         GameTooltip:AddLine("Right-click drag to move", 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end)
@@ -172,10 +162,8 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
         if GameTooltip:GetOwner() == self then GameTooltip:Hide() end
     end)
 
-    -- Start invisible; UpdateTrackers will show it if spell is known and ready
     f:SetAlpha(0)
     f:EnableMouse(false)
-
     RestorePoint(f, key, defaultX, defaultY)
     return f
 end
@@ -186,8 +174,7 @@ local function UpdateTrackerVisuals(f, spellID, known)
         if not InCombatLockdown() then f:EnableMouse(false) end
         return
     end
-    local ready = IsReady(spellID)
-    if ready then
+    if IsReady(spellID) then
         f:SetAlpha(1)
         if not InCombatLockdown() then f:EnableMouse(true) end
     else
@@ -355,7 +342,7 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
-ev:RegisterEvent("SPELL_UPDATE_USABLE")   -- fires when usability changes (replaces cooldown polling)
+ev:RegisterEvent("SPELL_UPDATE_USABLE")
 ev:RegisterEvent("SPELLS_CHANGED")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 
@@ -367,8 +354,8 @@ ev:SetScript("OnEvent", function(_, event, arg1)
 
     if event == "PLAYER_LOGIN" then
         EnsureDB()
-        frames.herb   = CreateTrackerFrame("herb", SPELL_HERB, GetSpellName(SPELL_HERB), -40, 0, "Herb")
-        frames.mine   = CreateTrackerFrame("mine", SPELL_MINE, GetSpellName(SPELL_MINE),  40, 0, "Ore")
+        frames.herb   = CreateTrackerFrame("herb", SPELL_HERB, -40, 0, "Herb")
+        frames.mine   = CreateTrackerFrame("mine", SPELL_MINE,  40, 0, "Ore")
         reminderFrame = CreateReminderOverlay()
         if DB.opts.reminder then EnableTooltipTicker() end
         RefreshKnown()
@@ -377,14 +364,8 @@ ev:SetScript("OnEvent", function(_, event, arg1)
         return
     end
 
-    if event == "PLAYER_REGEN_ENABLED" then
-        ApplyLockState()
-    end
-
-    if event == "SPELLS_CHANGED" then
-        RefreshKnown()
-    end
-
+    if event == "PLAYER_REGEN_ENABLED" then ApplyLockState() end
+    if event == "SPELLS_CHANGED" then RefreshKnown() end
     UpdateTrackers()
 end)
 
@@ -418,11 +399,9 @@ SlashCmdList.FOHM = function(msg)
         print("Mine IsReady:", tostring(IsReady(SPELL_MINE)))
         if frames.herb then
             print("Herb alpha:", frames.herb:GetAlpha(), "mouse:", tostring(frames.herb:IsMouseEnabled()))
-            print("Herb macrotext:", frames.herb:GetAttribute("macrotext"))
         end
         if frames.mine then
             print("Mine alpha:", frames.mine:GetAlpha(), "mouse:", tostring(frames.mine:IsMouseEnabled()))
-            print("Mine macrotext:", frames.mine:GetAttribute("macrotext"))
         end
         print("Herb name:", tostring(GetSpellName(SPELL_HERB)))
         print("Mine name:", tostring(GetSpellName(SPELL_MINE)))
