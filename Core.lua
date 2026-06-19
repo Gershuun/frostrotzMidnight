@@ -57,11 +57,7 @@ end
 -- Spell helpers
 -- =========================
 local function KnowsSpell(spellID)
-    if C_SpellBook and C_SpellBook.IsSpellKnown then
-        local ok, known = pcall(C_SpellBook.IsSpellKnown, spellID)
-        if ok then return known and true or false end
-    end
-    local ok, known = pcall(C_Spell.IsSpellKnown, spellID)
+    local ok, known = pcall(C_SpellBook.IsSpellKnown, spellID)
     return ok and known and true or false
 end
 
@@ -490,14 +486,8 @@ SlashCmdList.FOHM = function(msg)
         end
         print("Herb name:", tostring(GetSpellName(SPELL_HERB)))
         print("Mine name:", tostring(GetSpellName(SPELL_MINE)))
-        if C_SpellBook and C_SpellBook.IsSpellKnown then
-            local ok, v = pcall(C_SpellBook.IsSpellKnown, SPELL_HERB)
-            print("C_SpellBook.IsSpellKnown(herb):", ok, tostring(v))
-        else
-            print("C_SpellBook.IsSpellKnown: not available")
-        end
-        local ok2, v2 = pcall(C_Spell.IsSpellKnown, SPELL_HERB)
-        print("C_Spell.IsSpellKnown(herb):", ok2, tostring(v2))
+        local ok2, v2 = pcall(C_SpellBook.IsSpellKnown, SPELL_HERB)
+        print("C_SpellBook.IsSpellKnown(herb):", ok2, tostring(v2))
     else
         print("FOHM commands:")
         print("  /fohm lock / unlock")
