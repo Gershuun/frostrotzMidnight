@@ -105,7 +105,7 @@ end
 -- Trackers
 -- =========================
 local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, smallLabel)
-    local f = CreateFrame("Button", nil, UIParent, "SecureActionButtonTemplate,BackdropTemplate")
+    local f = CreateFrame("Button", "FOHM_Tracker_" .. key, UIParent, "SecureActionButtonTemplate,BackdropTemplate")
     f:SetSize(ICON_SIZE, ICON_SIZE)
     f:SetMovable(true)
     f:SetClampedToScreen(true)
