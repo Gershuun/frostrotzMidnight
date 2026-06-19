@@ -11,6 +11,10 @@ end
 local SPELL_HERB = 1223014 -- Overload Infused Herb
 local SPELL_MINE = 1225392 -- Overload Infused Deposit
 
+-- Mounting/dismounting briefly reports a tiny fake cooldown on unrelated spells.
+-- Real Overload cooldowns run ~12 hours, so anything under a minute is noise — ignore it.
+local MIN_REAL_COOLDOWN = 60 -- seconds
+
 local ICON_SIZE  = 64
 local FONT_BODY  = "Fonts\\FRIZQT__.TTF"
 local FONT_TITLE = "Fonts\\MORPHEUS.TTF"
@@ -104,7 +108,8 @@ end
 
 local function IsReady(spellID)
     local start, duration = GetCooldownInfo(spellID)
-    return duration <= 0 or start <= 0
+    if duration <= 0 or start <= 0 then return true end
+    return duration < MIN_REAL_COOLDOWN
 end
 
 local function ApplyLockState()
@@ -208,7 +213,9 @@ local function UpdateTrackerVisuals(f, spellID, known)
     if not InCombatLockdown() then f:EnableMouse(true) end
 
     local start, duration = GetCooldownInfo(spellID)
-    local ready = duration <= 0 or start <= 0
+    -- Ignore tiny transient cooldown blips (e.g. mounting briefly reports ~1-2s
+    -- on unrelated spells). Real Overload cooldowns run minutes, not seconds.
+    local ready = duration <= 0 or start <= 0 or duration < MIN_REAL_COOLDOWN
 
     if ready then
         f.cooldown:Clear()
