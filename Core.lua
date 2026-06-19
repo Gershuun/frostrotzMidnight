@@ -29,9 +29,10 @@ local tooltipElapsed  = 0
 -- DB
 -- =========================
 local function EnsureDB()
-    FOHM_DB        = FOHM_DB or {}
-    FOHM_DB.frames = FOHM_DB.frames or {}
-    FOHM_DB.opts   = FOHM_DB.opts or { locked = false, reminder = true }
+    FOHM_DB           = FOHM_DB or {}
+    FOHM_DB.frames    = FOHM_DB.frames or {}
+    FOHM_DB.opts      = FOHM_DB.opts or { locked = false, reminder = true }
+    FOHM_DB.cooldowns = FOHM_DB.cooldowns or {} -- last-known-good cooldown cache, survives reloads
     DB = FOHM_DB
 end
 
@@ -92,18 +93,36 @@ end
 
 -- Reads the real cooldown using the same safe pattern as TeleportMenu:
 -- check IsSecret() before touching the value, never compare a secret directly.
+--
+-- In combat, GetSpellCooldown often returns secret values for protection reasons.
+-- When that happens we must NOT assume "ready" (that's exactly backwards — combat
+-- is when an on-cooldown spell is most likely to still be on cooldown). Instead we
+-- cache the last successfully-read value per spell and keep showing that until we
+-- can read a fresh one again (e.g. after leaving combat).
 local function GetCooldownInfo(spellID)
     local ok, cooldown = pcall(C_Spell.GetSpellCooldown, spellID)
     if not ok or type(cooldown) ~= "table" then
+        local cached = DB and DB.cooldowns and DB.cooldowns[spellID]
+        if cached then return cached.start, cached.duration end
         return 0, 0
     end
+
     local start    = cooldown.startTime
     local duration = cooldown.duration
+
     if IsSecret(start) or IsSecret(duration) then
-        -- Can't read it; assume ready rather than crash. Cooldown swipe just won't show.
+        -- Can't read it right now (likely in combat) — fall back to the last
+        -- known-good value instead of guessing "ready".
+        local cached = DB and DB.cooldowns and DB.cooldowns[spellID]
+        if cached then return cached.start, cached.duration end
         return 0, 0
     end
-    return start or 0, duration or 0
+
+    start, duration = start or 0, duration or 0
+    if DB and DB.cooldowns then
+        DB.cooldowns[spellID] = { start = start, duration = duration }
+    end
+    return start, duration
 end
 
 local function IsReady(spellID)
@@ -200,8 +219,17 @@ local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
     return f
 end
 
+-- Hide the trackers in any instanced content — dungeons, delves, raids, battlegrounds,
+-- arenas. Gathering isn't relevant in any of these. GetInstanceInfo's instanceType
+-- covers all of them: "party" (dungeons/delves), "raid", "pvp" (battlegrounds), "arena".
+local function IsInInstancedContent()
+    local ok, inInstance, instanceType = pcall(IsInInstance)
+    if not ok then return false end
+    return inInstance and instanceType ~= "none"
+end
+
 local function UpdateTrackerVisuals(f, spellID, known)
-    if not known then
+    if not known or IsInInstancedContent() then
         f:SetAlpha(0)
         if not InCombatLockdown() then f:EnableMouse(false) end
         return
@@ -338,7 +366,7 @@ local function UpdateTooltipReminder()
         return
     end
     if not reminderFrame then return end
-    if UnitAffectingCombat("player") then
+    if UnitAffectingCombat("player") or IsInInstancedContent() then
         if reminderFrame:IsShown() then reminderFrame:Hide() end
         lastTooltipName = nil
         return
@@ -354,15 +382,16 @@ local function UpdateTooltipReminder()
     local left1 = _G.GameTooltipTextLeft1
     if not left1 then return end
     local okName, name = pcall(left1.GetText, left1)
-    if not okName or not name or name == "" then return end
+    if not okName or not name then return end
+    local emptyOk, isEmpty = pcall(function() return name == "" end)
+    if emptyOk and isEmpty then return end
 
-    -- name may be a "secret" protected string in Midnight (world object tooltips).
-    -- Direct comparison (name == lastTooltipName) would throw a taint error, so skip
-    -- the dedup optimization entirely when the value is secret and just re-parse.
-    if not IsSecret(name) then
-        if name == lastTooltipName then return end
-        lastTooltipName = name
-    end
+    -- IsSecret() is not 100% reliable at catching every secret string variant,
+    -- so don't trust it as a gate before comparing. Wrap the comparison itself in
+    -- pcall — if it throws (secret value), just skip the dedup and re-parse.
+    local dedupOk, isDuplicate = pcall(function() return name == lastTooltipName end)
+    if dedupOk and isDuplicate then return end
+    if dedupOk then lastTooltipName = name end
 
     local ok, affix, text, kind = pcall(ParseNodeName, name)
     if not ok or not affix then
@@ -370,7 +399,8 @@ local function UpdateTooltipReminder()
         return
     end
     reminderFrame.title:SetText(kind .. " Overload Opportunity")
-    reminderFrame.body:SetText(IsSecret(name) and text or (name .. "\n" .. text))
+    local concatOk, bodyText = pcall(function() return name .. "\n" .. text end)
+    reminderFrame.body:SetText(concatOk and bodyText or text)
     reminderFrame:Show()
 end
 
@@ -408,6 +438,9 @@ ev:SetScript("OnEvent", function(_, event, arg1)
 
     if event == "PLAYER_LOGIN" then
         EnsureDB()
+        -- startTime values are GetTime()-relative and meaningless across a relog/reload;
+        -- wipe any cache from the previous session so we don't show a stale cooldown.
+        wipe(DB.cooldowns)
         frames.herb   = CreateTrackerFrame("herb", SPELL_HERB, -40, 0, "Herb")
         frames.mine   = CreateTrackerFrame("mine", SPELL_MINE,  40, 0, "Ore")
         reminderFrame = CreateReminderOverlay()
