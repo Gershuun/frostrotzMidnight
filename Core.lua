@@ -146,6 +146,11 @@ local function CreateTrackerFrame(key, spellID, spellName, defaultX, defaultY, s
     f.spellID = spellID
     f.key     = key
 
+    -- PreClick fires before the secure action — safe to use for diagnostics
+    f:SetScript("PreClick", function(self, button)
+        print("FOHM: clicked", key, "button=", button, "macrotext=", self:GetAttribute("macrotext"))
+    end)
+
     f:SetScript("OnDragStart", function(self)
         if not InCombatLockdown() then self:StartMoving() end
     end)
