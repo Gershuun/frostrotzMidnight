@@ -395,7 +395,8 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
-ev:RegisterEvent("SPELL_UPDATE_USABLE")
+ev:RegisterEvent("SPELL_UPDATE_COOLDOWN")     -- fires when a spell's cooldown actually changes
+ev:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")  -- fires the instant a cast completes, for immediate feedback
 ev:RegisterEvent("SPELLS_CHANGED")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 
@@ -419,6 +420,11 @@ ev:SetScript("OnEvent", function(_, event, arg1)
 
     if event == "PLAYER_REGEN_ENABLED" then ApplyLockState() end
     if event == "SPELLS_CHANGED" then RefreshKnown() end
+
+    if event == "UNIT_SPELLCAST_SUCCEEDED" and arg1 ~= "player" then
+        return -- ignore other units' casts
+    end
+
     UpdateTrackers()
 end)
 
