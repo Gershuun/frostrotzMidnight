@@ -1,6 +1,13 @@
 local ADDON = ...
 local DB
 
+-- Midnight protects certain values (tooltip text, cooldown numbers) from addon code.
+-- issecretvalue() safely checks this without crashing, unlike a direct comparison.
+local issecretvalue = issecretvalue or function() return false end
+local function IsSecret(v)
+    return issecretvalue(v)
+end
+
 local SPELL_HERB = 1223014 -- Overload Infused Herb
 local SPELL_MINE = 1225392 -- Overload Infused Deposit
 
@@ -79,14 +86,25 @@ local function GetSpellName(spellID)
     return nil
 end
 
--- IsSpellUsable is safe from tainted addons; avoids reading protected cooldown numbers.
-local function IsReady(spellID)
-    if C_Spell and C_Spell.IsSpellUsable then
-        local ok, usable = pcall(C_Spell.IsSpellUsable, spellID)
-        if ok then return usable and true or false end
+-- Reads the real cooldown using the same safe pattern as TeleportMenu:
+-- check IsSecret() before touching the value, never compare a secret directly.
+local function GetCooldownInfo(spellID)
+    local ok, cooldown = pcall(C_Spell.GetSpellCooldown, spellID)
+    if not ok or type(cooldown) ~= "table" then
+        return 0, 0
     end
-    local ok, usable = pcall(IsUsableSpell, spellID)
-    return ok and usable and true or false
+    local start    = cooldown.startTime
+    local duration = cooldown.duration
+    if IsSecret(start) or IsSecret(duration) then
+        -- Can't read it; assume ready rather than crash. Cooldown swipe just won't show.
+        return 0, 0
+    end
+    return start or 0, duration or 0
+end
+
+local function IsReady(spellID)
+    local start, duration = GetCooldownInfo(spellID)
+    return duration <= 0 or start <= 0
 end
 
 local function ApplyLockState()
@@ -104,18 +122,26 @@ end
 -- Trackers
 -- =========================
 local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
-    -- Plain Button — no secure template since click-casting is not yet supported
-    -- in Midnight's addon API for these spell types.
-    local f = CreateFrame("Button", "FOHM_Tracker_" .. key, UIParent, "BackdropTemplate")
+    -- Confirmed working pattern from TeleportMenu: SecureActionButtonTemplate with
+    -- type=spell and the numeric spell ID set directly as the attribute value.
+    local f = CreateFrame("Button", "FOHM_Tracker_" .. key, UIParent, "SecureActionButtonTemplate,BackdropTemplate")
     f:SetSize(ICON_SIZE, ICON_SIZE)
     f:SetMovable(true)
     f:SetClampedToScreen(true)
+    f:SetAttribute("type",  "spell")
+    f:SetAttribute("spell", spellID)
+    f:RegisterForClicks("AnyDown", "AnyUp")
     f:RegisterForDrag("RightButton")
 
     -- Icon
     f.icon = f:CreateTexture(nil, "BACKGROUND")
     f.icon:SetAllPoints()
     f.icon:SetTexture(GetSpellIcon(spellID))
+
+    -- Cooldown swipe, same template Blizzard action bars use
+    f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+    f.cooldown:SetAllPoints()
+    f.cooldown:SetDrawEdge(true)
 
     -- Glow border
     f.border = f:CreateTexture(nil, "OVERLAY")
@@ -154,6 +180,7 @@ local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         local name = GetSpellName(self.spellID) or ("SpellID " .. self.spellID)
         GameTooltip:AddLine(name)
+        GameTooltip:AddLine("Click to cast", 0.2, 1, 0.2)
         GameTooltip:AddLine("Right-click drag to move", 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end)
@@ -174,12 +201,25 @@ local function UpdateTrackerVisuals(f, spellID, known)
         if not InCombatLockdown() then f:EnableMouse(false) end
         return
     end
-    if IsReady(spellID) then
-        f:SetAlpha(1)
-        if not InCombatLockdown() then f:EnableMouse(true) end
+
+    -- Never call Hide()/Show() on a secure frame — it breaks the click handler.
+    -- Alpha + EnableMouse simulates visibility without touching secure state.
+    f:SetAlpha(1)
+    if not InCombatLockdown() then f:EnableMouse(true) end
+
+    local start, duration = GetCooldownInfo(spellID)
+    local ready = duration <= 0 or start <= 0
+
+    if ready then
+        f.cooldown:Clear()
+        f.icon:SetDesaturated(false)
+        f.border:SetAlpha(0.9)
+        f.text:Show()
     else
-        f:SetAlpha(0)
-        if not InCombatLockdown() then f:EnableMouse(false) end
+        f.cooldown:SetCooldown(start, duration)
+        f.icon:SetDesaturated(true)
+        f.border:SetAlpha(0)
+        f.text:Hide()
     end
 end
 
@@ -308,8 +348,14 @@ local function UpdateTooltipReminder()
     if not left1 then return end
     local okName, name = pcall(left1.GetText, left1)
     if not okName or not name or name == "" then return end
-    if name == lastTooltipName then return end
-    lastTooltipName = name
+
+    -- name may be a "secret" protected string in Midnight (world object tooltips).
+    -- Direct comparison (name == lastTooltipName) would throw a taint error, so skip
+    -- the dedup optimization entirely when the value is secret and just re-parse.
+    if not IsSecret(name) then
+        if name == lastTooltipName then return end
+        lastTooltipName = name
+    end
 
     local ok, affix, text, kind = pcall(ParseNodeName, name)
     if not ok or not affix then
@@ -317,7 +363,7 @@ local function UpdateTooltipReminder()
         return
     end
     reminderFrame.title:SetText(kind .. " Overload Opportunity")
-    reminderFrame.body:SetText(name .. "\n" .. text)
+    reminderFrame.body:SetText(IsSecret(name) and text or (name .. "\n" .. text))
     reminderFrame:Show()
 end
 
