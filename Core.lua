@@ -57,11 +57,11 @@ end
 -- Spell helpers
 -- =========================
 local function KnowsSpell(spellID)
-    if C_Spell and C_Spell.IsSpellKnown then
-        local ok, known = pcall(C_Spell.IsSpellKnown, spellID)
+    if C_SpellBook and C_SpellBook.IsSpellKnown then
+        local ok, known = pcall(C_SpellBook.IsSpellKnown, spellID)
         if ok then return known and true or false end
     end
-    local ok, known = pcall(IsSpellKnown, spellID)
+    local ok, known = pcall(C_Spell.IsSpellKnown, spellID)
     return ok and known and true or false
 end
 
@@ -73,20 +73,13 @@ local function RefreshKnown()
 end
 
 local function GetSpellIcon(spellID)
-    if C_Spell and C_Spell.GetSpellInfo then
-        local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
-        if ok and info and info.iconID then return info.iconID end
-    end
-    local ok, tex = pcall(GetSpellTexture, spellID)
-    return ok and tex or 134400
+    local ok, info = pcall(C_Spell.GetSpellInfo, spellID)
+    if ok and info and info.iconID then return info.iconID end
+    return 134400 -- fallback question-mark icon
 end
 
 local function GetSpellName(spellID)
-    if C_Spell and C_Spell.GetSpellName then
-        local ok, name = pcall(C_Spell.GetSpellName, spellID)
-        if ok and name and name ~= "" then return name end
-    end
-    local ok, name = pcall(GetSpellInfo, spellID)
+    local ok, name = pcall(C_Spell.GetSpellName, spellID)
     if ok and name and name ~= "" then return name end
     return nil
 end
@@ -162,7 +155,7 @@ local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
     f.icon:SetAllPoints()
     f.icon:SetTexture(GetSpellIcon(spellID))
 
-    -- Cooldown swipe, same template Blizzard action bars use
+    -- Cooldown swipe
     f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
     f.cooldown:SetAllPoints()
     f.cooldown:SetDrawEdge(true)
@@ -497,6 +490,14 @@ SlashCmdList.FOHM = function(msg)
         end
         print("Herb name:", tostring(GetSpellName(SPELL_HERB)))
         print("Mine name:", tostring(GetSpellName(SPELL_MINE)))
+        if C_SpellBook and C_SpellBook.IsSpellKnown then
+            local ok, v = pcall(C_SpellBook.IsSpellKnown, SPELL_HERB)
+            print("C_SpellBook.IsSpellKnown(herb):", ok, tostring(v))
+        else
+            print("C_SpellBook.IsSpellKnown: not available")
+        end
+        local ok2, v2 = pcall(C_Spell.IsSpellKnown, SPELL_HERB)
+        print("C_Spell.IsSpellKnown(herb):", ok2, tostring(v2))
     else
         print("FOHM commands:")
         print("  /fohm lock / unlock")
