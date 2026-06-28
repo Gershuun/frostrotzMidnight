@@ -208,17 +208,31 @@ local function CreateTrackerFrame(key, spellID, defaultX, defaultY, smallLabel)
     return f
 end
 
--- Hide the trackers in any instanced content — dungeons, delves, raids, battlegrounds,
--- arenas. Gathering isn't relevant in any of these. GetInstanceInfo's instanceType
--- covers all of them: "party" (dungeons/delves), "raid", "pvp" (battlegrounds), "arena".
-local function IsInInstancedContent()
-    local ok, inInstance, instanceType = pcall(IsInInstance)
-    if not ok then return false end
-    return inInstance and instanceType ~= "none"
+-- Conditions where showing the icon provides zero value to the player.
+-- Returns true if the icon should be hidden.
+local function ShouldHide()
+    -- Instanced content: dungeons, delves, raids, battlegrounds, arenas.
+    -- Gathering nodes never spawn in these.
+    local ok, inInstance = pcall(IsInInstance)
+    if ok and inInstance then return true end
+
+    -- Player is dead or a ghost. Can't interact with anything.
+    local isDead = UnitIsDeadOrGhost and UnitIsDeadOrGhost("player")
+    if isDead then return true end
+
+    -- Player is in a vehicle and has lost control of their character.
+    local inVehicle = UnitInVehicle and UnitInVehicle("player")
+    if inVehicle then return true end
+
+    -- Player is on a taxi (flight path). No agency, no gathering possible.
+    local onTaxi = UnitOnTaxi and UnitOnTaxi("player")
+    if onTaxi then return true end
+
+    return false
 end
 
 local function UpdateTrackerVisuals(f, spellID, known)
-    if not known or IsInInstancedContent() then
+    if not known or ShouldHide() then
         f:SetAlpha(0)
         if not InCombatLockdown() then f:EnableMouse(false) end
         return
@@ -355,7 +369,7 @@ local function UpdateTooltipReminder()
         return
     end
     if not reminderFrame then return end
-    if UnitAffectingCombat("player") or IsInInstancedContent() then
+    if UnitAffectingCombat("player") or ShouldHide() then
         if reminderFrame:IsShown() then reminderFrame:Hide() end
         lastTooltipName = nil
         return
@@ -414,10 +428,16 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
-ev:RegisterEvent("SPELL_UPDATE_COOLDOWN")     -- fires when a spell's cooldown actually changes
-ev:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")  -- fires the instant a cast completes, for immediate feedback
+ev:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+ev:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 ev:RegisterEvent("SPELLS_CHANGED")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
+ev:RegisterEvent("PLAYER_DEAD")             -- hide when dead
+ev:RegisterEvent("PLAYER_ALIVE")            -- show again on release
+ev:RegisterEvent("PLAYER_UNGHOST")          -- show again after ghost
+ev:RegisterEvent("UNIT_ENTERING_VEHICLE")   -- hide when entering vehicle
+ev:RegisterEvent("UNIT_EXITED_VEHICLE")     -- show again after exiting
+ev:RegisterEvent("PLAYER_CONTROL_GAINED")   -- catch-all for regaining control
 
 ev:SetScript("OnEvent", function(_, event, arg1)
     if event == "ADDON_LOADED" and arg1 == ADDON then
@@ -443,8 +463,13 @@ ev:SetScript("OnEvent", function(_, event, arg1)
     if event == "PLAYER_REGEN_ENABLED" then ApplyLockState() end
     if event == "SPELLS_CHANGED" then RefreshKnown() end
 
+    -- Vehicle events fire for all units; only care about the player
+    if (event == "UNIT_ENTERING_VEHICLE" or event == "UNIT_EXITED_VEHICLE") and arg1 ~= "player" then
+        return
+    end
+
     if event == "UNIT_SPELLCAST_SUCCEEDED" and arg1 ~= "player" then
-        return -- ignore other units' casts
+        return
     end
 
     UpdateTrackers()
